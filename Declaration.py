@@ -2,23 +2,17 @@ import streamlit as st
 import pdfplumber
 from docx import Document
 import io
-import zipfile
 import re
 
-st.title("📄 PDF Data Extractor to Word Template")
-st.write("ดึงข้อมูลจาก PDF ไปใส่ใน Word Template อัตโนมัติ")
+st.title("📄 PDF to Word (Direct Download)")
+st.write("ดึงข้อมูลจาก PDF ลง Template Word โดยตรง ไม่ต้องผ่าน ZIP")
 
-# ---------------------------------------------------------
-# ฟังก์ชันสำหรับแทนที่คำใน Word (ทั้งในย่อหน้าปกติ และในตาราง)
-# ---------------------------------------------------------
+# ฟังก์ชันสำหรับแทนที่คำใน Word
 def replace_text_in_doc(doc, old_text, new_text):
-    # ค้นหาและแทนที่ในข้อความปกติ
     for p in doc.paragraphs:
         if old_text in p.text:
             for run in p.runs:
                 run.text = run.text.replace(old_text, new_text)
-                
-    # ค้นหาและแทนที่ในตาราง
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
@@ -27,60 +21,54 @@ def replace_text_in_doc(doc, old_text, new_text):
                         for run in p.runs:
                             run.text = run.text.replace(old_text, new_text)
 
-# ---------------------------------------------------------
-# ส่วนที่ 1: รับไฟล์จากผู้ใช้งาน
-# ---------------------------------------------------------
-template_file = st.file_uploader("1. อัปโหลดไฟล์ Word Template (.docx)", type="docx")
-uploaded_pdfs = st.file_uploader("2. อัปโหลดไฟล์ PDF (เลือกได้หลายไฟล์)", type="pdf", accept_multiple_files=True)
+# 1. ส่วนรับไฟล์
+template_file = st.file_uploader("1. อัปโหลด Word Template (.docx)", type="docx")
+uploaded_pdfs = st.file_uploader("2. อัปโหลด PDF", type="pdf", accept_multiple_files=True)
 
-# ---------------------------------------------------------
-# ส่วนที่ 2: เริ่มประมวลผล
-# ---------------------------------------------------------
 if template_file and uploaded_pdfs:
-    if st.button("🚀 เริ่มดึงข้อมูลและสร้างเอกสาร"):
+    st.subheader("📦 ผลลัพธ์การประมวลผล")
+    
+    for pdf_file in uploaded_pdfs:
+        # อ่านข้อความจาก PDF
+        text_content = ""
+        with pdfplumber.open(pdf_file) as pdf:
+            for page in pdf.pages:
+                text_content += page.extract_text() + "\n"
         
-        zip_buffer = io.BytesIO()
+        # --- ส่วนการดึงข้อมูลแบบ "อยู่ด้านล่างหัวข้อ" ---
+        # ใช้คำสั่งค้นหาคำสำคัญ แล้วตามด้วยตัวเลขที่อยู่ในบรรทัดถัดไป
+        # \s*[\n\r]\s* หมายถึง ค้นหาช่องว่างและตัวขึ้นบรรทัดใหม่
+        amount_pattern = r'จำนวนเงินที่จ่าย\s*[\n\r]\s*([\d,]+\.?\d*)'
+        tax_pattern = r'ภาษีที่หักไว้\s*[\n\r]\s*([\d,]+\.?\d*)'
         
-        with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-            
-            for pdf_file in uploaded_pdfs:
-                st.info(f"กำลังประมวลผล: {pdf_file.name}")
-                
-                # 1. อ่านข้อความจาก PDF
-                text_content = ""
-                with pdfplumber.open(pdf_file) as pdf:
-                    for page in pdf.pages:
-                        text_content += page.extract_text() + "\n"
-                
-                # 2. ค้นหา "จำนวนเงิน" และ "ภาษี" ด้วย Regex (ค้นหาตัวเลขที่อยู่หลังคำสำคัญ)
-                # หมายเหตุ: อาจจะต้องปรับคำว่า "จำนวนเงินที่จ่าย" ตามที่เขียนเป๊ะๆ ใน PDF ของคุณ
-                amount_match = re.search(r'จำนวนเงินที่จ่าย\s*([\d,]+\.?\d*)', text_content)
-                tax_match = re.search(r'ภาษีที่หักไว้\s*([\d,]+\.?\d*)', text_content)
-                
-                # ถ้าหาเจอให้เก็บค่าไว้ ถ้าหาไม่เจอให้ใส่ข้อความแจ้งเตือน
-                amount_val = amount_match.group(1) if amount_match else "(ไม่พบยอดเงิน)"
-                tax_val = tax_match.group(1) if tax_match else "(ไม่พบยอดภาษี)"
-                
-                # 3. เปิดไฟล์ Word Template ขึ้นมา
-                doc = Document(template_file)
-                
-                # 4. แทนที่คำว่า XXX และ YYY ด้วยข้อมูลที่ดึงมาได้
-                replace_text_in_doc(doc, "XXX", amount_val)
-                replace_text_in_doc(doc, "YYY", tax_val)
-                
-                # 5. เซฟไฟล์ Word ลงหน่วยความจำ และจับใส่ ZIP
-                doc_buffer = io.BytesIO()
-                doc.save(doc_buffer)
-                
-                new_filename = pdf_file.name.replace(".pdf", "_สำเร็จ.docx")
-                zip_file.writestr(new_filename, doc_buffer.getvalue())
-
-        st.success("✅ ประมวลผลเสร็จสิ้นทุกไฟล์!")
+        amount_match = re.search(amount_pattern, text_content)
+        tax_match = re.search(tax_pattern, text_content)
         
-        # ปุ่มดาวน์โหลด
-        st.download_button(
-            label="📥 ดาวน์โหลดไฟล์ Word ทั้งหมด (ZIP)",
-            data=zip_buffer.getvalue(),
-            file_name="completed_documents.zip",
-            mime="application/zip"
-        )
+        amount_val = amount_match.group(1) if amount_match else "ไม่พบข้อมูล"
+        tax_val = tax_match.group(1) if tax_match else "ไม่พบข้อมูล"
+        
+        # สร้าง Word ใหม่จาก Template
+        template_file.seek(0) # รีเซ็ต cursor ของไฟล์ template
+        doc = Document(template_file)
+        replace_text_in_doc(doc, "XXX", amount_val)
+        replace_text_in_doc(doc, "YYY", tax_val)
+        
+        # บันทึกลงหน่วยความจำ
+        doc_io = io.BytesIO()
+        doc.save(doc_io)
+        doc_io.seek(0)
+        
+        # 2. สร้างปุ่มดาวน์โหลดแยกตามไฟล์ (ไม่ต้องโหลด ZIP)
+        new_filename = pdf_file.name.replace(".pdf", "_Success.docx")
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.write(f"✅ {pdf_file.name} (เงิน: {amount_val} / ภาษี: {tax_val})")
+        with col2:
+            st.download_button(
+                label="ดาวน์โหลดไฟล์ Word",
+                data=doc_io,
+                file_name=new_filename,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key=pdf_file.name # ป้องกันปุ่มซ้ำกัน
+            )
